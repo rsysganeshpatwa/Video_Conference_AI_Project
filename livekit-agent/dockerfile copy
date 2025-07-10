@@ -1,0 +1,93 @@
+# Use NVIDIA CUDA base image with cuDNN 8
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    CUDA_HOME=/usr/local/cuda \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu \
+    GGML_CUDA=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    curl \
+    libopenblas-dev \
+    libssl-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    libatlas-base-dev \
+    gfortran \
+    liblapack-dev \
+    portaudio19-dev \
+    autoconf \
+    automake \
+    libtool \
+    ninja-build \
+    ocl-icd-opencl-dev opencl-headers clinfo \
+    ffmpeg \
+    python3.11 python3.11-venv python3.11-dev python3-pip \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+    python3 -m pip install --upgrade pip setuptools wheel
+
+# Set work directory
+WORKDIR /app
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install initial dependencies (excluding numpy/pandas/etc)
+RUN pip install --no-cache-dir --ignore-installed -r requirements.txt
+
+# Add CUDA stub symlinks before building GPU-dependent libraries
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so \
+ && ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
+ && echo "/usr/local/cuda/lib64/stubs" > /etc/ld.so.conf.d/cuda-stubs.conf \
+ && ldconfig
+
+# Install llama-cpp-python with CUDA support
+RUN CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-cache-dir --force-reinstall llama-cpp-python
+
+# Preload DeepFace weights (optional but avoids redownloads)
+RUN mkdir -p /root/.deepface/weights && \
+    wget -O /root/.deepface/weights/vgg_face_weights.h5 https://github.com/serengil/deepface_models/releases/download/v1.0/vgg_face_weights.h5
+
+# Install OpenCV and DeepFace + TensorFlow compatible with cuDNN 8
+RUN pip install --no-cache-dir \
+    opencv-python-headless \
+    tensorflow==2.13 \
+    tf-keras \
+    deepface
+
+
+# Install faster-whisper and GPU backend
+RUN pip install --upgrade pip \
+ && pip install ctranslate2[gpu] \
+ && pip install faster-whisper \
+ && pip install "tokenizers>=0.19,<0.20"
+
+
+RUN pip install tensorflow==2.12
+RUN pip install --upgrade faster-whisper ctranslate2[gpu]
+RUN pip install --upgrade typing_extensions
+RUN pip install fer opencv-python matplotlib  moviepy==1.0.3
+
+# Fix numpy to known compatible version
+RUN pip install numpy==1.26.4 --force-reinstall
+
+
+
+
+# Copy source code
+COPY . .
+
+# Run your app
+CMD ["python", "run.py"]

@@ -1,0 +1,75 @@
+# ✅ Using NVIDIA CUDA 12.3.2 with cuDNN 9
+FROM nvidia/cuda:12.3.2-cudnn9-devel-ubuntu22.04
+
+COPY third_party/cudnn-local-repo-ubuntu2204-9.1.0_1.0-1_amd64.deb /tmp/
+
+# Install the repo and GPG key
+RUN dpkg -i /tmp/cudnn-local-repo-ubuntu2204-9.1.0_1.0-1_amd64.deb && \
+    cp /var/cudnn-local-repo-ubuntu2204-9.1.0/cudnn-*-keyring.gpg /usr/share/keyrings/ && \
+    apt-key add /var/cudnn-local-repo-ubuntu2204-9.1.0/cudnn-*-keyring.gpg && \
+    apt-get update && \
+    apt-get install -y --allow-change-held-packages libcudnn9-cuda-12 libcudnn9-dev-cuda-12 && \
+    rm -rf /var/lib/apt/lists/* /tmp/cudnn-local-repo-ubuntu2204-9.1.0_1.0-1_amd64.deb
+
+
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV CUDA_DOCKER_ARCH=all
+ENV GGML_CUDA=1
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    curl \
+    libopenblas-dev \
+    libssl-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    libatlas-base-dev \
+    gfortran \
+    liblapack-dev \
+    portaudio19-dev \
+    autoconf \
+    automake \
+    libtool \
+    ffmpeg \    
+    ninja-build \
+    && add-apt-repository ppa:deadsnakes/ppa -y \
+    && apt-get update && apt-get install -y \
+    python3.11 python3.11-venv python3.11-dev python3-pip \
+    ocl-icd-opencl-dev opencl-headers clinfo \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /etc/OpenCL/vendors && \
+    echo "libnvidia-opencl.so.1" > /etc/OpenCL/vendors/nvidia.icd
+
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+    python3 -m pip install --upgrade pip setuptools wheel
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir --ignore-installed -r requirements.txt
+
+# Optional: only if you previously had conflicts
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so \
+ && ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
+ && echo "/usr/local/cuda/lib64/stubs" > /etc/ld.so.conf.d/cuda-stubs.conf \
+ && ldconfig
+
+RUN CMAKE_ARGS="-DGGML_CUDA=on" pip install --no-cache-dir --force-reinstall llama-cpp-python
+RUN pip install numpy==1.26.4 --force-reinstall
+
+# Debug: check cudnn symbol exists
+RUN nm -D /usr/lib/x86_64-linux-gnu/libcudnn_graph.so.9 | grep cudnnGetLibConfig || echo "⚠️ cudnnGetLibConfig not found!"
+
+COPY . .
+
+CMD ["python", "main.py"]

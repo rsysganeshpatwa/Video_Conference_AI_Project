@@ -1,0 +1,58 @@
+services:
+  model-server:
+    build: ./model-server
+    container_name: model_server_container
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./model-server:/app
+      - ./model-server/models_file:/app/models_file:ro  # mount models read-only if needed
+      - ./livekit-agent/livekit_sessions:/app/livekit_sessions:ro
+      - ./voice_agent/voice_sessions:/app/voice_sessions:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
+ 
+  # app1:
+  #   build: ./livekit-agent
+  #   container_name: momo_agent_container
+  #   runtime: nvidia
+  #   environment:
+  #     - NVIDIA_VISIBLE_DEVICES=all
+  #   ports:
+  #     - "8001:8001"
+  #   volumes:
+  #     - ./livekit-agent:/app
+  #     - ./voice_agent/models:/app/models:ro  
+  #     - /usr/lib/x86_64-linux-gnu/libcuda.so:/usr/lib/x86_64-linux-gnu/libcuda.so
+  #     - /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1
+  #     - ./deepface_weights:/root/.deepface/weights
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - capabilities: [gpu]
+
+  # app2:
+  #   build: ./voice_agent
+  #   container_name: voice_agent_container
+  #   runtime: nvidia
+  #   environment:
+  #     - NVIDIA_VISIBLE_DEVICES=all
+  #     - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+  #   ports:
+  #     - "8002:8002"
+  #   volumes:
+  #     - ./voice_agent:/app
+  #     - ./voice_agent/models:/app/models:ro  
+  #     - /usr/lib/x86_64-linux-gnu/libcuda.so:/usr/lib/x86_64-linux-gnu/libcuda.so
+  #     - /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1
+
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - capabilities: [gpu]
