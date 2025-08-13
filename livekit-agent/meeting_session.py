@@ -14,7 +14,7 @@ from emotion_helper import save_emotion_to_db, clear_room_emotions
 import soundfile as sf
 import shutil
 import traceback
-# from deepface_local import DeepEmotionRecognizer
+from deepface_local import DeepEmotionRecognizer
 import cv2
 #json
 import json
@@ -36,7 +36,7 @@ class MeetingSession:
         self.participant_identity_map = {}
         self.emotion_task = None
         self.running = False
-        self.emotion_recognizer = None#DeepEmotionRecognizer()
+        self.emotion_recognizer = DeepEmotionRecognizer()
 
     def session_dir(self):
         return os.path.join("livekit_sessions", self.room_name)
@@ -129,8 +129,9 @@ class MeetingSession:
                 frame = event.frame
                 img = self.convert_i420_to_bgr(frame.data, frame.width, frame.height)
 
-               
-                emotion = self.emotion_recognizer.analyze(img)
+
+                emotion = self.emotion_recognizer.analyze(img, participant_sid)
+                print(f"👤 {self.participant_identity_map.get(participant_sid, participant_sid)}: Detected emotion: {emotion}")
                 
 
                 await self.send_emotion_update(
@@ -266,7 +267,7 @@ class MeetingSession:
         mom = self.generate_mom(self.session_file("transcript.txt"))
         
            # ✅ Prepend duration info
-        speaker_info = "\n".join([f"{identity}: {dur}" for identity, dur in durations.items()])
+        speaker_info = "\n".join([f"{ identity.split('_')[0] if '_' in identity else identity}: {dur}" for identity, dur in durations.items()])
         full_mom = f"Speaker Durations:\n{speaker_info}\n\n{mom}"
 
         if full_mom:

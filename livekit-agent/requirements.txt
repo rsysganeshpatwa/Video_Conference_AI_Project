@@ -1,3 +1,4 @@
+uvicorn
 numpy
 livekit
 opencv-python-headless
@@ -5,7 +6,6 @@ requests
 scipy
 sounddevice
 soundfile
-uvicorn
 fastapi
 python-dotenv
 librosa

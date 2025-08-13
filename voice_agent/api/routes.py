@@ -67,7 +67,11 @@ async def stop_agent(req: StopAgentRequest):
     agent.remove_target_participant(identity)
 
     # Check if there are any remaining target participants
-    if not agent.get_target_participants():
+    identitys = agent.get_target_participants()
+    
+    print(f"🔍 Remaining targets in room '{room_name}': {identitys}")
+
+    if not identitys:
         print(f"❌ No target participants left. Disconnecting agent from room '{room_name}'")
         await agent.reset(room_name=room_name)
         del room_agent_map[room_name]

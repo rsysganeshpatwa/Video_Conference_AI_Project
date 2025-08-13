@@ -310,3 +310,4 @@ voice_agent/XTTS-v2/
 model-server/models/*.gguf
 model-server/models/*.bin
 model-server/sessions/
+*.txt
