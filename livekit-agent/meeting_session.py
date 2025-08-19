@@ -16,8 +16,10 @@ import shutil
 import traceback
 from deepface_local import DeepEmotionRecognizer
 import cv2
-#json
 import json
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 
 
@@ -37,6 +39,17 @@ class MeetingSession:
         self.emotion_task = None
         self.running = False
         self.emotion_recognizer = DeepEmotionRecognizer()
+        
+        # Threading for multiple participants
+        self.emotion_executor = ThreadPoolExecutor(max_workers=6, thread_name_prefix="emotion")
+        self.participant_threads = {}
+        self.last_emotion_time = {}
+        self.last_sent_emotion = {}  # Track last sent emotion per participant to avoid duplicates
+        self.emotion_throttle_interval = 0.1  # Reduced to 100ms for real-time response
+        
+        # Event loop reference for thread-safe communication
+        self.main_loop = None
+        self.emotion_queue = asyncio.Queue()
 
     def session_dir(self):
         return os.path.join("livekit_sessions", self.room_name)
@@ -124,41 +137,131 @@ class MeetingSession:
     
 
     async def receive_video(self, video_stream, participant_sid):
+        """Handle video stream for a single participant with real-time processing"""
+        frame_count = 0
         async for event in video_stream:
             try:
-                frame = event.frame
-                img = self.convert_i420_to_bgr(frame.data, frame.width, frame.height)
-
-
-                emotion = self.emotion_recognizer.analyze(img, participant_sid)
-                print(f"👤 {self.participant_identity_map.get(participant_sid, participant_sid)}: Detected emotion: {emotion}")
+                frame_count += 1
                 
-
-                await self.send_emotion_update(
-                    self.room,
-                    self.participant_identity_map.get(participant_sid),
-                    emotion
+                # Process every 3rd frame for better real-time response
+                if frame_count % 5 != 0:
+                    continue
+                
+                # Minimal throttling check for real-time response
+                current_time = time.time()
+                last_time = self.last_emotion_time.get(participant_sid, 0)
+                
+                if current_time - last_time < self.emotion_throttle_interval:
+                    continue
+                
+                frame = event.frame
+                
+                # Immediate processing without waiting
+                self.process_emotion_immediate(
+                    frame.data, frame.width, frame.height, 
+                    participant_sid, current_time
                 )
+                
             except Exception as e:
-                print(f"⚠️ DeepFace failed: {e}")
+                print(f"⚠️ Video receive failed for {participant_sid}: {e}")
+
+    def process_emotion_immediate(self, frame_data, width, height, participant_sid, timestamp):
+        """Immediate emotion processing without async overhead"""
+        try:
+            # Submit to thread pool without awaiting for immediate response
+            future = self.emotion_executor.submit(
+                self.analyze_emotion_sync,
+                frame_data, width, height, participant_sid, timestamp
+            )
+            
+            # Don't wait for result, just submit the task
+            # The thread will handle sending the update when ready
+            
+        except Exception as e:
+            print(f"⚠️ Immediate emotion processing failed: {e}")
+
+    def analyze_emotion_sync(self, frame_data, width, height, participant_sid, timestamp):
+        """Synchronous emotion analysis - runs in thread pool with immediate callback"""
+        try:
+            # Convert frame data to image
+            img = self.convert_i420_to_bgr(frame_data, width, height)
+            
+            # Use smaller size for faster processing
+            if img.shape[1] > 224 or img.shape[0] > 224:
+                img = cv2.resize(img, (224, 224), interpolation=cv2.INTER_LINEAR)
+            
+            # Analyze emotion
+            emotion = self.emotion_recognizer.analyze(img, participant_sid)
+            
+            if emotion:
+                identity = self.participant_identity_map.get(participant_sid, participant_sid)
+                
+                # Check if this is a new emotion (different from last sent)
+                last_emotion = self.last_sent_emotion.get(participant_sid)
+                
+                if last_emotion is None or last_emotion != emotion:
+                    # First emotion or different emotion detected
+                    if last_emotion is None:
+                        print(f"👤 {identity}: First emotion detected: {emotion}")
+                    else:
+                        print(f"👤 {identity}: Emotion changed from {last_emotion} to {emotion}")
+                    
+                    # Send emotion update only if it's different or first time
+                    self.send_emotion_sync(identity, emotion)
+                    
+                    # Update last sent emotion to avoid duplicates
+                    self.last_sent_emotion[participant_sid] = emotion
+                    
+                    # Update last emotion time
+                    self.last_emotion_time[participant_sid] = timestamp
+                else:
+                    # Same emotion detected, no need to send update
+                    print(f"👤 {identity}: Same emotion ({emotion}) - skipping duplicate")
+            
+            return emotion
+            
+        except Exception as e:
+            print(f"⚠️ Sync emotion analysis failed: {e}")
+            return None
+
+    def send_emotion_sync(self, participant_identity, emotion):
+        """Synchronous emotion update from thread using queue"""
+        try:
+            message = {
+                "type": "emotion",
+                "participant": participant_identity,
+                "emotion": emotion
+            }
+            
+            # Put message in queue for main thread to process
+            if self.main_loop and not self.main_loop.is_closed():
+                self.main_loop.call_soon_threadsafe(
+                    self.emotion_queue.put_nowait, 
+                    message
+                )
+                
+        except Exception as e:
+            print(f"⚠️ Sync emotion send failed: {e}")
 
 
             
-    async def send_emotion_update(self,room: rtc.Room, participant_identity: str, emotion: str):
-        message = {
-            "type": "emotion",
-            "participant": participant_identity,
-            "emotion": emotion
-        }
+    async def send_emotion_update(self, room: rtc.Room, participant_identity: str, emotion: str):
+        try:
+            message = {
+                "type": "emotion",
+                "participant": participant_identity,
+                "emotion": emotion
+            }
 
-        await room.local_participant.publish_data(
-            payload=json.dumps(message),       # Can be str or bytes
-            reliable=True,                     # RELIABLE delivery (default)
-                 # or ["participant1", ...] if targeting specific ones
-            topic="emotion"                    # optional topic filter
-        )
+            await room.local_participant.publish_data(
+                payload=json.dumps(message),       # Can be str or bytes
+                reliable=False,                    # Use unreliable for faster delivery
+                topic="emotion"                    # optional topic filter
+            )
 
-        #print(f"📤 Sent emotion update: {emotion} for {participant_identity}")
+            #print(f"📤 Sent emotion update: {emotion} for {participant_identity}")
+        except Exception as e:
+            print(f"⚠️ Failed to send emotion update: {e}")
         
     def _on_track_subscribed(self, track, publication, participant):
         if track.kind == rtc.TrackKind.KIND_AUDIO:
@@ -172,6 +275,29 @@ class MeetingSession:
         #     video_stream = rtc.VideoStream(track)
         #     self.participant_identity_map[participant.sid] = participant.identity
         #     asyncio.create_task(self.receive_video(video_stream, participant.sid))
+
+    def _on_participant_disconnected(self, participant):
+        """Clean up emotion tracking data when participant disconnects"""
+        try:
+            participant_sid = participant.sid
+            identity = self.participant_identity_map.get(participant_sid, participant_sid)
+            
+            # Clean up emotion tracking data
+            if participant_sid in self.last_emotion_time:
+                del self.last_emotion_time[participant_sid]
+            if participant_sid in self.last_sent_emotion:
+                del self.last_sent_emotion[participant_sid]
+            if participant_sid in self.participant_threads:
+                del self.participant_threads[participant_sid]
+            if participant_sid in self.participant_identity_map:
+                del self.participant_identity_map[participant_sid]
+            if participant_sid in self.participant_audio_map:
+                del self.participant_audio_map[participant_sid]
+                
+            print(f"🚪 Cleaned up emotion tracking for disconnected participant: {identity}")
+            
+        except Exception as e:
+            print(f"⚠️ Failed to clean up participant data: {e}")
             
             
     
@@ -185,10 +311,37 @@ class MeetingSession:
         os.makedirs(self.session_dir(), exist_ok=True)
         self.room = rtc.Room()
         self.room.on("track_subscribed", self._on_track_subscribed)
+        self.room.on("participant_disconnected", self._on_participant_disconnected)
         await self.room.connect(url, token)
         print(f"[{self.room_name}] Connected.")
-        #self.emotion_task = asyncio.create_task(self.track_emotions())
+        
+        # Store main event loop reference for thread-safe communication
+        self.main_loop = asyncio.get_event_loop()
+        
+        # Start emotion queue processor
+        asyncio.create_task(self.process_emotion_queue())
+        
         self.running = True
+
+    async def process_emotion_queue(self):
+        """Process emotion updates from worker threads"""
+        while self.running:
+            try:
+                # Wait for emotion updates from threads
+                message = await asyncio.wait_for(self.emotion_queue.get(), timeout=1.0)
+                
+                if self.room:
+                    await self.room.local_participant.publish_data(
+                        payload=json.dumps(message),
+                        reliable=False,
+                        topic="emotion"
+                    )
+                    
+            except asyncio.TimeoutError:
+                # Continue loop if no messages in queue
+                continue
+            except Exception as e:
+                print(f"⚠️ Emotion queue processing failed: {e}")
 
     async def stop(self):
         if not self.room:
@@ -200,6 +353,16 @@ class MeetingSession:
         if self.emotion_task:
             self.emotion_task.cancel()
             #clear_room_emotions(self.room_name)
+        
+        # Shutdown thread pool executor
+        if hasattr(self, 'emotion_executor'):
+            self.emotion_executor.shutdown(wait=False)
+            
+        # Clear emotion tracking data
+        self.last_emotion_time.clear()
+        self.last_sent_emotion.clear()
+        self.participant_threads.clear()
+            
         print(f"🛑 Emotion tracker stopped.")
 
         if not self.audio_buffers:

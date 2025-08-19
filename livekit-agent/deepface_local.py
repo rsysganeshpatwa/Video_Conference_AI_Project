@@ -5,12 +5,12 @@ import cv2
 
 
 class DeepEmotionRecognizer:
-    def __init__(self, window_size=15, threshold=0.90):
+    def __init__(self, window_size=1, threshold=0.80):
         """
-        Initialize emotion recognizer with history window per participant.
+        Initialize emotion recognizer optimized for real-time response.
         """
-        self.window_size = window_size
-        self.threshold = threshold
+        self.window_size = window_size  # Set to 1 for immediate response
+        self.threshold = threshold  # Lowered for faster detection
         self.emotion_history = defaultdict(lambda: deque(maxlen=window_size))
         self.check_device()
 
