@@ -36,6 +36,10 @@ SESSIONS = {}
 class StartRequest(BaseModel):
     room_name: str
 
+class EmotionRequest(BaseModel):
+    room_name: str
+    participant_identity: str
+
 @app.post("/start")
 async def start_meeting(
     req: StartRequest,
@@ -61,3 +65,64 @@ async def stop_meeting(req: StartRequest):
         return {"error": "session not found"}
     mom = await session.stop()
     return {"mom": mom or "No MoM generated"}
+
+@app.post("/start-emotion")
+async def start_emotion_tracking(req: EmotionRequest):
+    """Start emotion tracking for a specific participant in a running room"""
+    session = SESSIONS.get(req.room_name)
+    if not session:
+        return {"error": "session not found"}
+    
+    if not session.running:
+        return {"error": "session not running"}
+    
+    # Add participant to emotion tracking whitelist
+    if not hasattr(session, 'emotion_enabled_participants'):
+        session.emotion_enabled_participants = set()
+    
+    session.emotion_enabled_participants.add(req.participant_identity)
+    
+    return {
+        "status": "emotion tracking started",
+        "room_name": req.room_name,
+        "participant": req.participant_identity,
+        "enabled_participants": list(session.emotion_enabled_participants)
+    }
+
+@app.post("/stop-emotion")
+async def stop_emotion_tracking(req: EmotionRequest):
+    """Stop emotion tracking for a specific participant"""
+    session = SESSIONS.get(req.room_name)
+    if not session:
+        return {"error": "session not found"}
+    
+    if hasattr(session, 'emotion_enabled_participants'):
+        session.emotion_enabled_participants.discard(req.participant_identity)
+        
+        return {
+            "status": "emotion tracking stopped",
+            "room_name": req.room_name,
+            "participant": req.participant_identity,
+            "enabled_participants": list(session.emotion_enabled_participants)
+        }
+    
+    return {"status": "no emotion tracking was active"}
+
+@app.get("/emotion-status/{room_name}")
+async def get_emotion_status(room_name: str):
+    """Get current emotion tracking status for a room"""
+    session = SESSIONS.get(room_name)
+    if not session:
+        return {"error": "session not found"}
+    
+    enabled_participants = []
+    if hasattr(session, 'emotion_enabled_participants'):
+        enabled_participants = list(session.emotion_enabled_participants)
+    
+    return {
+        "room_name": room_name,
+        "session_running": session.running,
+        "emotion_enabled_participants": enabled_participants,
+        "total_participants": len(session.participant_identity_map),
+        "participant_identities": list(session.participant_identity_map.values())
+    }

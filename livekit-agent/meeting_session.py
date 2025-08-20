@@ -60,6 +60,9 @@ class MeetingSession:
         
         # Performance monitoring - simplified to track frame-to-emotion-update delay only
         self.emotion_update_delays = []  # Track delays from frame processing to emotion update
+        
+        # Emotion tracking control - only process emotion for enabled participants
+        self.emotion_enabled_participants = set()  # Participants with emotion tracking enabled
 
     def session_dir(self):
         return os.path.join("livekit_sessions", self.room_name)
@@ -187,11 +190,16 @@ class MeetingSession:
         print(f"🎥 Video stream ended for {participant_sid}")
 
     def process_emotion_immediate(self, frame_data, width, height, participant_sid, frame_start_time, frame_count):
-        """Immediate emotion processing - tracking delay to emotion update"""
+        """Immediate emotion processing - only for enabled participants"""
         try:
             # Check if participant still exists
             if participant_sid not in self.participant_identity_map:
                 return
+            
+            # Check if emotion tracking is enabled for this participant
+            participant_identity = self.participant_identity_map.get(participant_sid)
+            if participant_identity not in self.emotion_enabled_participants:
+                return  # Skip emotion processing for this participant
                 
             # Submit to thread pool
             future = self.emotion_executor.submit(
